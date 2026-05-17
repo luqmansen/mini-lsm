@@ -21,11 +21,11 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 
 use crate::iterators::StorageIterator;
-use crate::key::{self, KeySlice};
+use crate::key::KeySlice;
 use crate::table::SsTableBuilder;
 use crate::wal::Wal;
-use anyhow::Result;
-use bytes::{Buf, Bytes};
+use anyhow::{Ok, Result};
+use bytes::Bytes;
 use crossbeam_skiplist::SkipMap;
 use ouroboros::self_referencing;
 use std::sync::atomic::Ordering;
@@ -100,28 +100,60 @@ impl MemTable {
     /// In week 1, day 1, simply put the key-value pair into the skipmap.
     /// In week 2, day 6, also flush the data to WAL.
     /// In week 3, day 5, modify the function to use the batch API.
-    pub fn put(&self, _key: &[u8], _value: &[u8]) -> Result<()> {
-        let mut size = self.approximate_size.load(Ordering::SeqCst);
-        let entry = self.map.get(_key);
+    pub fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
+        // peek inside the map firs
+        let old_entry = self.map.get(key);
+        // calculate the delta in size based on the actual change
+        //
+        let size_delta: isize = match old_entry {
+            None => key.len() as isize + value.len() as isize,
+            Some(old_entry) => {
+                let new_len = value.len();
+                let old_len = old_entry.value().len();
 
-        if entry.is_none() {
-            size += _key.len() + _value.len()
+                (new_len - old_len) as isize
+            }
+        };
+
+        // perform the actual insert
+        self.map
+            .insert(key.to_owned().into(), value.to_owned().into());
+
+        // update the counter safely
+        if size_delta > 0 {
+            self.approximate_size
+                .fetch_add(size_delta as usize, Ordering::SeqCst);
         } else {
-            let curr_value = entry.unwrap().value().clone();
-            size += if curr_value.len() > _value.len() {
-                curr_value.len()
-            } else {
-                _value.len()
-            };
-            size += _key.len()
+            // subs if new size is < prev size
+            self.approximate_size
+                .fetch_sub(size_delta.unsigned_abs(), Ordering::SeqCst);
         }
 
-        self.map
-            .insert(_key.to_owned().into(), _value.to_owned().into());
+        Ok(())
 
-        self.approximate_size.swap(size, Ordering::SeqCst);
-        // println!("{:?}:{:?} - size {:?}", _key, _value, self.approximate_size);
-        return Ok(());
+        // my original solution :D
+
+        // let mut size = self.approximate_size.load(Ordering::SeqCst);
+        // let entry = self.map.get(key);
+
+        // if entry.is_none() {
+        //     size += key.len() + value.len()
+        // } else {
+        //     let curr_value = entry.unwrap().value().clone();
+        //     size += if curr_value.len() > value.len() {
+        //         curr_value.len()
+        //     } else {
+        //         value.len()
+        //     };
+        //     size += key.len()
+        // }
+
+        // self.map
+        //     .insert(key.to_owned().into(), value.to_owned().into());
+
+        // self.approximate_size.swap(size, Ordering::SeqCst);
+        // // println!("{:?}:{:?} - size {:?}", _key, _value, self.approximate_size);
+        // return Ok(());
     }
 
     /// Implement this in week 3, day 5; if you want to implement this earlier, use `&[u8]` as the key type.
