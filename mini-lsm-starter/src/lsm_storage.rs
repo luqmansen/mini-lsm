@@ -17,7 +17,6 @@
 
 use std::collections::HashMap;
 use std::ops::Bound;
-use std::os::linux::raw::stat;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
@@ -303,7 +302,7 @@ impl LsmStorageInner {
 
         // check the active memtable
         if let Some(value) = state.memtable.get(_key) {
-            return Ok(Some((value)).filter(|e| !e.is_empty()));
+            return Ok(Some(value).filter(|e| !e.is_empty()));
         }
 
         // check immutable memtables i order
@@ -313,7 +312,7 @@ impl LsmStorageInner {
             }
         }
 
-        return Ok(None);
+        Ok(None)
 
         // my original solution :D
         //
