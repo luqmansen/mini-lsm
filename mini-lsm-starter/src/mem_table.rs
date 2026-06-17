@@ -21,15 +21,16 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 
 use crate::iterators::StorageIterator;
+use crate::key::Key;
 use crate::key::KeySlice;
 use crate::table::SsTableBuilder;
 use crate::wal::Wal;
 use anyhow::{Ok, Result};
 use bytes::Bytes;
 use crossbeam_skiplist::SkipMap;
+use moka::ops::compute::Op;
 use ouroboros::self_referencing;
 use std::sync::atomic::Ordering;
-
 /// A basic mem-table based on crossbeam-skiplist.
 ///
 /// An initial implementation of memtable is part of week 1, day 1. It will be incrementally implemented in other
@@ -102,32 +103,36 @@ impl MemTable {
     /// In week 3, day 5, modify the function to use the batch API.
     pub fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
         // peek inside the map firs
-        let old_entry = self.map.get(key);
-        // calculate the delta in size based on the actual change
-        //
-        let size_delta: isize = match old_entry {
-            None => key.len() as isize + value.len() as isize,
-            Some(old_entry) => {
-                let new_len = value.len();
-                let old_len = old_entry.value().len();
+        // let old_entry = self.map.get(key);
+        // // calculate the delta in size based on the actual change
+        // //
+        // let size_delta: isize = match old_entry {
+        //     None => key.len() as isize + value.len() as isize,
+        //     Some(old_entry) => {
+        //         let new_len = value.len();
+        //         let old_len = old_entry.value().len();
 
-                (new_len - old_len) as isize
-            }
-        };
+        //         new_len as isize - old_len as isize
+        //     }
+        // };
 
         // perform the actual insert
         self.map
             .insert(key.to_owned().into(), value.to_owned().into());
 
-        // update the counter safely
-        if size_delta > 0 {
-            self.approximate_size
-                .fetch_add(size_delta as usize, Ordering::SeqCst);
-        } else {
-            // subs if new size is < prev size
-            self.approximate_size
-                .fetch_sub(size_delta.unsigned_abs(), Ordering::SeqCst);
-        }
+        let new_entry_size = key.len() as isize + value.len() as isize;
+        self.approximate_size
+            .fetch_add(new_entry_size as usize, Ordering::SeqCst);
+
+        // // update the counter safely
+        // if size_delta > 0 {
+        //     self.approximate_size
+        //         .fetch_add(size_delta as usize, Ordering::SeqCst);
+        // } else {
+        //     // subs if new size is < prev size
+        //     self.approximate_size
+        //         .fetch_sub(size_delta.unsigned_abs(), Ordering::SeqCst);
+        // }
 
         Ok(())
 
@@ -170,7 +175,25 @@ impl MemTable {
 
     /// Get an iterator over a range of keys.
     pub fn scan(&self, _lower: Bound<&[u8]>, _upper: Bound<&[u8]>) -> MemTableIterator {
-        unimplemented!()
+        let mut range = self.map.range((map_bound(_lower), map_bound(_upper)));
+
+        let (item, should_skip) = range
+            .next()
+            .map(|e| ((e.key().clone(), e.value().clone()), true))
+            .unwrap_or(((Bytes::new(), Bytes::new()), false));
+
+        MemTableIterator::new(
+            self.map.clone(),
+            |map| {
+                let mut range = map.range((map_bound(_lower), map_bound(_upper)));
+                if should_skip {
+                    range.next();
+                }
+
+                range
+            },
+            item,
+        )
     }
 
     /// Flush the mem-table to SSTable. Implement in week 1 day 6.
@@ -216,18 +239,32 @@ impl StorageIterator for MemTableIterator {
     type KeyType<'a> = KeySlice<'a>;
 
     fn value(&self) -> &[u8] {
-        unimplemented!()
+        self.borrow_item().1.as_ref()
     }
 
     fn key(&self) -> KeySlice<'_> {
-        unimplemented!()
+        Key::from_slice(self.borrow_item().0.as_ref())
     }
 
     fn is_valid(&self) -> bool {
-        unimplemented!()
+        if self.borrow_item().0.is_empty() {
+            return false;
+        }
+        true
     }
 
     fn next(&mut self) -> Result<()> {
-        unimplemented!()
+        let next_entry =
+            self.with_iter_mut(|iter| iter.next().map(|e| (e.key().clone(), e.value().clone())));
+
+        self.with_item_mut(|curr| {
+            match next_entry {
+                Some(e) => *curr = e,
+                None => {
+                    *curr = (Bytes::new(), Bytes::new());
+                }
+            }
+            Ok(())
+        })
     }
 }
