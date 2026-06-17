@@ -344,7 +344,7 @@ impl LsmStorageInner {
 
     /// Put a key-value pair into the storage by writing into the current memtable.
     pub fn put(&self, _key: &[u8], _value: &[u8]) -> Result<()> {
-        let target_size = self.options.num_memtable_limit;
+        let target_size = self.options.target_sst_size;
         {
             let state = self.state.read();
 
