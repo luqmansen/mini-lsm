@@ -67,20 +67,20 @@ impl<I: StorageIterator> MergeIterator<I> {
                 bh.push(HeapWrapper(index, iter));
             }
         }
+        let top = bh.pop();
 
-        let mut s = Self {
+        Self {
             iter_heap: bh,
-            current: Option::None,
-        };
-
-        s._next();
-
-        s
+            current: top,
+        }
     }
 
     fn _next(&mut self) -> Result<()> {
         if let Some(c) = self.current.as_mut() {
-            c.1.next();
+            let res = c.1.next();
+            if res.is_err() {
+                return res;
+            }
         }
         let current = self.current.take();
         if let Some(c) = current {
@@ -97,7 +97,12 @@ impl<I: StorageIterator> MergeIterator<I> {
         while let Some(mut top) = self.iter_heap.peek_mut() {
             let matches = { top.1.as_ref().key() == current.as_ref().unwrap().1.key() };
             if matches {
-                top.1.next();
+                let res = top.1.next();
+                if res.is_err() {
+                    PeekMut::pop(top);
+                    return res;
+                }
+
                 if !top.1.is_valid() {
                     PeekMut::pop(top);
                 }
