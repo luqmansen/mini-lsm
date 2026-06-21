@@ -28,7 +28,6 @@ use crate::wal::Wal;
 use anyhow::{Ok, Result};
 use bytes::Bytes;
 use crossbeam_skiplist::SkipMap;
-use moka::ops::compute::Op;
 use ouroboros::self_referencing;
 use std::sync::atomic::Ordering;
 /// A basic mem-table based on crossbeam-skiplist.
