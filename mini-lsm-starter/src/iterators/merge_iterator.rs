@@ -17,8 +17,9 @@
 
 use std::cmp::{self};
 use std::collections::BinaryHeap;
+use std::collections::binary_heap::PeekMut;
 
-use anyhow::Result;
+use anyhow::{Ok, Result};
 
 use crate::key::KeySlice;
 
@@ -53,34 +54,80 @@ impl<I: StorageIterator> Ord for HeapWrapper<I> {
 /// Merge multiple iterators of the same type. If the same key occurs multiple times in some
 /// iterators, prefer the one with smaller index.
 pub struct MergeIterator<I: StorageIterator> {
-    iters: BinaryHeap<HeapWrapper<I>>,
+    iter_heap: BinaryHeap<HeapWrapper<I>>,
     current: Option<HeapWrapper<I>>,
 }
 
 impl<I: StorageIterator> MergeIterator<I> {
     pub fn create(iters: Vec<Box<I>>) -> Self {
-        unimplemented!()
+        let mut bh: BinaryHeap<HeapWrapper<I>> = BinaryHeap::new();
+
+        for (index, iter) in iters.into_iter().enumerate() {
+            if iter.is_valid() {
+                bh.push(HeapWrapper(index, iter));
+            }
+        }
+
+        let mut s = Self {
+            iter_heap: bh,
+            current: Option::None,
+        };
+
+        s._next();
+
+        s
+    }
+
+    fn _next(&mut self) -> Result<()> {
+        if let Some(c) = self.current.as_mut() {
+            c.1.next();
+        }
+        let current = self.current.take();
+        if let Some(c) = current {
+            if c.1.is_valid() {
+                self.iter_heap.push(c);
+            }
+        }
+
+        let current = self.iter_heap.pop();
+        if current.is_none() {
+            return Ok(());
+        }
+
+        while let Some(mut top) = self.iter_heap.peek_mut() {
+            let matches = { top.1.as_ref().key() == current.as_ref().unwrap().1.key() };
+            if matches {
+                top.1.next();
+                if !top.1.is_valid() {
+                    PeekMut::pop(top);
+                }
+            }
+        }
+
+        let c = current.unwrap();
+        self.current = Some(c);
+
+        Ok(())
     }
 }
-
 impl<I: 'static + for<'a> StorageIterator<KeyType<'a> = KeySlice<'a>>> StorageIterator
     for MergeIterator<I>
 {
     type KeyType<'a> = KeySlice<'a>;
 
     fn key(&self) -> KeySlice<'_> {
-        unimplemented!()
+        self.current.as_ref().unwrap().1.key()
     }
 
     fn value(&self) -> &[u8] {
-        unimplemented!()
+        self.current.as_ref().unwrap().1.value()
     }
 
     fn is_valid(&self) -> bool {
-        unimplemented!()
+        self.current.is_some()
     }
 
     fn next(&mut self) -> Result<()> {
-        unimplemented!()
+        self._next()
     }
 }
