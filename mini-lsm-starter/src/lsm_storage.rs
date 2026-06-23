@@ -30,6 +30,8 @@ use crate::compact::{
     CompactionController, CompactionOptions, LeveledCompactionController, LeveledCompactionOptions,
     SimpleLeveledCompactionController, SimpleLeveledCompactionOptions, TieredCompactionController,
 };
+use crate::iterators::StorageIterator;
+use crate::iterators::merge_iterator::MergeIterator;
 use crate::lsm_iterator::{FusedIterator, LsmIterator};
 use crate::manifest::Manifest;
 use crate::mem_table::MemTable;
@@ -397,7 +399,7 @@ impl LsmStorageInner {
 
     /// Force freeze the current memtable to an immutable memtable
     pub fn force_freeze_memtable(&self, _state_lock_observer: &MutexGuard<'_, ()>) -> Result<()> {
-        dbg!("MEMTABLE FROZEN");
+        // dbg!("MEMTABLE FROZEN");
         let mut guard = self.state.write();
         let mut state = guard.as_ref().clone();
 
@@ -427,6 +429,20 @@ impl LsmStorageInner {
         _lower: Bound<&[u8]>,
         _upper: Bound<&[u8]>,
     ) -> Result<FusedIterator<LsmIterator>> {
-        unimplemented!()
+        let state = self.state.read();
+
+        let imm_memtables = state.imm_memtables.clone();
+        let memtbl = state.memtable.clone();
+
+        let mut iters = Vec::new();
+
+        iters.push(Box::new(memtbl.scan(_lower, _upper)));
+        for tbl in imm_memtables.iter() {
+            iters.push(Box::new(tbl.scan(_lower, _upper)));
+        }
+
+        Ok(FusedIterator::new(
+            LsmIterator::new(MergeIterator::create(iters)).unwrap(),
+        ))
     }
 }

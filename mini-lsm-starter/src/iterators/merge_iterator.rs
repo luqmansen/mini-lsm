@@ -67,7 +67,7 @@ impl<I: StorageIterator> MergeIterator<I> {
                 bh.push(HeapWrapper(index, iter));
             }
         }
-        let top = bh.pop();
+        let current = bh.pop();
 
         Self {
             iter_heap: bh,
