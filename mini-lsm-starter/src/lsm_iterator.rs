@@ -92,12 +92,13 @@ impl<I: StorageIterator> StorageIterator for FusedIterator<I> {
 
     fn next(&mut self) -> Result<()> {
         if self.is_valid() {
-            self.has_errored = false;
-            return self.iter.next();
+            return self.iter.next().inspect_err(|_| self.has_errored = true);
         }
-        self.has_errored = true;
+
+        if self.has_errored {
+            return Err(Error::msg("someting"));
+        }
 
         Ok(())
-        // Err(Error::msg("iter is invalid"))
     }
 }
