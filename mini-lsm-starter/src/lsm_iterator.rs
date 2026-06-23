@@ -30,7 +30,11 @@ pub struct LsmIterator {
 }
 
 impl LsmIterator {
-    pub(crate) fn new(iter: LsmIteratorInner) -> Result<Self> {
+    pub(crate) fn new(mut iter: LsmIteratorInner) -> Result<Self> {
+        while iter.is_valid() && iter.value().is_empty() {
+            let _ = iter.next();
+        }
+
         Ok(Self { inner: iter })
     }
 }
@@ -52,15 +56,11 @@ impl StorageIterator for LsmIterator {
 
     fn next(&mut self) -> Result<()> {
         if self.is_valid() {
-            let n = self.inner.next();
-            if n.is_err() {
-                return n;
-            }
+            self.inner.next()?;
 
-            if self.inner.is_valid() {
+            if self.is_valid() && self.inner.value().is_empty() {
                 return self.next();
             }
-            return n;
         }
         Ok(())
     }

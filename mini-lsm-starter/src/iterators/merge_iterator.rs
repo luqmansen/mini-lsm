@@ -71,7 +71,7 @@ impl<I: StorageIterator> MergeIterator<I> {
 
         Self {
             iter_heap: bh,
-            current_iterator: top,
+            current_iterator: current,
         }
     }
 }
@@ -98,16 +98,18 @@ impl<I: 'static + for<'a> StorageIterator<KeyType<'a> = KeySlice<'a>>> StorageIt
 
         while let Some(mut top) = self.iter_heap.peek_mut() {
             let matches = { top.1.as_ref().key() == current_key };
-            if matches {
-                let res = top.1.next();
-                if res.is_err() {
-                    PeekMut::pop(top);
-                    return res;
-                }
+            if !matches {
+                break;
+            }
 
-                if !top.1.is_valid() {
-                    PeekMut::pop(top);
-                }
+            let res = top.1.next();
+            if res.is_err() {
+                PeekMut::pop(top);
+                return res;
+            }
+
+            if !top.1.is_valid() {
+                PeekMut::pop(top);
             }
         }
         if current_iterator.1.next().is_ok() && current_iterator.1.is_valid() {
