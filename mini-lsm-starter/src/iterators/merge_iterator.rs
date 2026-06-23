@@ -21,7 +21,7 @@ use std::collections::binary_heap::PeekMut;
 
 use anyhow::{Ok, Result};
 
-use crate::key::KeySlice;
+use crate::key::{Key, KeySlice};
 
 use super::StorageIterator;
 
@@ -55,7 +55,7 @@ impl<I: StorageIterator> Ord for HeapWrapper<I> {
 /// iterators, prefer the one with smaller index.
 pub struct MergeIterator<I: StorageIterator> {
     iter_heap: BinaryHeap<HeapWrapper<I>>,
-    current: Option<HeapWrapper<I>>,
+    current_iterator: Option<HeapWrapper<I>>,
 }
 
 impl<I: StorageIterator> MergeIterator<I> {
@@ -71,31 +71,33 @@ impl<I: StorageIterator> MergeIterator<I> {
 
         Self {
             iter_heap: bh,
-            current: top,
+            current_iterator: top,
         }
     }
+}
+impl<I: 'static + for<'a> StorageIterator<KeyType<'a> = KeySlice<'a>>> StorageIterator
+    for MergeIterator<I>
+{
+    type KeyType<'a> = KeySlice<'a>;
 
-    fn _next(&mut self) -> Result<()> {
-        if let Some(c) = self.current.as_mut() {
-            let res = c.1.next();
-            if res.is_err() {
-                return res;
-            }
-        }
-        let current = self.current.take();
-        if let Some(c) = current {
-            if c.1.is_valid() {
-                self.iter_heap.push(c);
-            }
-        }
+    fn key(&self) -> KeySlice<'_> {
+        self.current_iterator.as_ref().unwrap().1.key()
+    }
 
-        let current = self.iter_heap.pop();
-        if current.is_none() {
-            return Ok(());
-        }
+    fn value(&self) -> &[u8] {
+        self.current_iterator.as_ref().unwrap().1.value()
+    }
+
+    fn is_valid(&self) -> bool {
+        self.current_iterator.is_some()
+    }
+
+    fn next(&mut self) -> Result<()> {
+        let mut current_iterator = self.current_iterator.take().unwrap();
+        let current_key = current_iterator.1.key();
 
         while let Some(mut top) = self.iter_heap.peek_mut() {
-            let matches = { top.1.as_ref().key() == current.as_ref().unwrap().1.key() };
+            let matches = { top.1.as_ref().key() == current_key };
             if matches {
                 let res = top.1.next();
                 if res.is_err() {
@@ -108,31 +110,14 @@ impl<I: StorageIterator> MergeIterator<I> {
                 }
             }
         }
+        if current_iterator.1.next().is_ok() && current_iterator.1.is_valid() {
+            self.iter_heap.push(current_iterator);
+        }
 
-        let c = current.unwrap();
-        self.current = Some(c);
+        if let Some(next_iter) = self.iter_heap.pop() {
+            self.current_iterator = Some(next_iter);
+        }
 
         Ok(())
-    }
-}
-impl<I: 'static + for<'a> StorageIterator<KeyType<'a> = KeySlice<'a>>> StorageIterator
-    for MergeIterator<I>
-{
-    type KeyType<'a> = KeySlice<'a>;
-
-    fn key(&self) -> KeySlice<'_> {
-        self.current.as_ref().unwrap().1.key()
-    }
-
-    fn value(&self) -> &[u8] {
-        self.current.as_ref().unwrap().1.value()
-    }
-
-    fn is_valid(&self) -> bool {
-        self.current.is_some()
-    }
-
-    fn next(&mut self) -> Result<()> {
-        self._next()
     }
 }
