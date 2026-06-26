@@ -21,7 +21,7 @@ use std::collections::binary_heap::PeekMut;
 
 use anyhow::{Ok, Result};
 
-use crate::key::{Key, KeySlice};
+use crate::key::KeySlice;
 
 use super::StorageIterator;
 
