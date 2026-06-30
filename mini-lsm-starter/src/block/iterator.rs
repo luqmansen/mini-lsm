@@ -15,6 +15,8 @@
 #![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
 #![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
 
+use bytes::Buf;
+
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -89,8 +91,6 @@ impl BlockIterator {
 
     /// Creates a block iterator and seek to the first key that >= `key`.
     pub fn create_and_seek_to_key(block: Arc<Block>, key: KeySlice) -> Self {
-        use bytes::Buf;
-
         let data = &mut block.data.as_slice();
         let mut current_keyslice = KeySlice::from_slice(&[]);
         let mut curr_value_len = 0;
@@ -222,6 +222,33 @@ impl BlockIterator {
     /// Note: You should assume the key-value pairs in the block are sorted when being added by
     /// callers.
     pub fn seek_to_key(&mut self, key: KeySlice) {
-        unimplemented!()
+        let data = &mut self.block.data.as_slice();
+        let initial_len = data.as_ref().len();
+        let mut key_bytes = Bytes::new();
+        let mut value_len: u16 = 0; // value can be 0 lenght anyway
+        let mut current_pos: usize = 0;
+
+        while data.has_remaining() {
+            // -----------------------------------------------------------------------
+            // | key_len (2B) | key (keylen) | value_len (2B) | value (varlen) | ... |
+            // -----------------------------------------------------------------------
+
+            let key_len = data.get_u16();
+            key_bytes = data.copy_to_bytes(key_len as usize);
+            value_len = data.get_u16();
+            data.advance(value_len as usize);
+
+            let current_keyslice = KeySlice::from_slice(key_bytes.as_ref());
+            current_pos = initial_len - data.remaining();
+
+            self.idx += 1;
+
+            if current_keyslice >= key {
+                break;
+            }
+        }
+
+        self.key = KeyVec::from_vec(key_bytes.to_vec());
+        self.value_range = (current_pos - value_len as usize, current_pos);
     }
 }
