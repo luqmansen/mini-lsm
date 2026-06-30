@@ -15,12 +15,11 @@
 #![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
 #![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
 
-use std::{io::Cursor, ops::Deref, sync::Arc};
+use std::sync::Arc;
 
 use bytes::Bytes;
-use nom::Input;
 
-use crate::key::{Key, KeySlice, KeyVec};
+use crate::key::{KeySlice, KeyVec};
 
 use super::Block;
 
@@ -51,7 +50,7 @@ impl BlockIterator {
 
     /// Creates a block iterator and seek to the first entry.
     pub fn create_and_seek_to_first(block: Arc<Block>) -> Self {
-        let first_offset_idx = block.offsets.get(0).unwrap();
+        let first_offset_idx = block.offsets.first().unwrap();
         let second_offset_idx = block.offsets.get(1).unwrap();
 
         let first_entry = &block.data[*first_offset_idx as usize..*second_offset_idx as usize];
@@ -94,28 +93,38 @@ impl BlockIterator {
 
         let data = &mut block.data.as_slice();
         let mut current_keyslice = KeySlice::from_slice(&[]);
-        let mut curr_ks_len = current_keyslice.len();
+        let mut curr_value_len = 0;
         let initial_len = data.as_ref().len();
-        let mut current_key_bytes: Bytes;
+        let mut key_bytes: Bytes;
 
         // refactor with more idiomatic buffer handling
         while data.has_remaining() {
-            let current_key_len = data.get_u16();
-            // let buf = vec![0; current_key_len as usize];
-            current_key_bytes = data.copy_to_bytes(current_key_len as usize);
-            current_keyslice = KeySlice::from_slice(current_key_bytes.as_ref());
-            curr_ks_len = current_keyslice.len();
+            // REMINDER
+            // -----------------------------------------------------------------------
+            // |                           Entry #1                            | ... |
+            // -----------------------------------------------------------------------
+            // | key_len (2B) | key (keylen) | value_len (2B) | value (varlen) | ... |
+            // -----------------------------------------------------------------------
+
+            let key_len = data.get_u16();
+            key_bytes = data.copy_to_bytes(key_len as usize);
+            let value_len = data.get_u16();
+            current_keyslice = KeySlice::from_slice(key_bytes.as_ref());
+            curr_value_len = value_len;
 
             if current_keyslice >= key {
                 break;
             }
         }
 
-        let current_pos = initial_len - data.remaining().clone();
+        let current_pos = initial_len - data.remaining();
+        let value_range = (current_pos, current_pos + curr_value_len as usize);
+
+        // dbg!(value_range);
 
         Self {
             block: Arc::clone(&block),
-            value_range: (current_pos + curr_ks_len, current_pos),
+            value_range,
             key: current_keyslice.to_key_vec(),
             idx: 0,
             first_key: current_keyslice.to_key_vec(),
@@ -142,7 +151,7 @@ impl BlockIterator {
     pub fn seek_to_first(&mut self) {
         let block = self.block.clone();
 
-        let first_offset_idx = block.offsets.get(0).unwrap();
+        let first_offset_idx = block.offsets.first().unwrap();
         let second_offset_idx = block.offsets.get(1).unwrap();
 
         let first_entry = &block.data[*first_offset_idx as usize..*second_offset_idx as usize];

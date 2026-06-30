@@ -81,9 +81,6 @@ impl Block {
             last_idx -= last_idx - *offset as usize;
         }
 
-        Self {
-            data,
-            offsets: offsets,
-        }
+        Self { data, offsets }
     }
 }
