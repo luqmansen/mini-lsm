@@ -22,14 +22,15 @@ mod iterator;
 use std::fs::File;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::SystemTime;
 
-use anyhow::Result;
+use anyhow::{Ok, Result};
 pub use builder::SsTableBuilder;
-use bytes::Buf;
+use bytes::{Buf, Bytes};
 pub use iterator::SsTableIterator;
 
 use crate::block::Block;
-use crate::key::{KeyBytes, KeySlice};
+use crate::key::{Key, KeyBytes, KeySlice};
 use crate::lsm_storage::BlockCache;
 
 use self::bloom::Bloom;
@@ -122,7 +123,22 @@ impl SsTable {
 
     /// Open SSTable from a file.
     pub fn open(id: usize, block_cache: Option<Arc<BlockCache>>, file: FileObject) -> Result<Self> {
-        unimplemented!()
+        let sst = SsTable {
+            file: file,
+            block_meta: todo!(),
+            block_meta_offset: todo!(),
+            id: id,
+            block_cache,
+            first_key: Key::from_bytes(Bytes::new()),
+            last_key: Key::from_bytes(Bytes::new()),
+            bloom: None,
+            max_ts: SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+        };
+
+        Ok(sst)
     }
 
     /// Create a mock SST with only first key + last key metadata

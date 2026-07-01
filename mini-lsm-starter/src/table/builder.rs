@@ -15,13 +15,20 @@
 #![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
 #![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
 
-use std::path::Path;
 use std::sync::Arc;
+use std::time::SystemTime;
+use std::{path::Path, time};
 
 use anyhow::Result;
+use bytes::Bytes;
 
 use super::{BlockMeta, SsTable};
-use crate::{block::BlockBuilder, key::KeySlice, lsm_storage::BlockCache};
+use crate::{
+    block::BlockBuilder,
+    key::{Key, KeySlice},
+    lsm_storage::BlockCache,
+    table::FileObject,
+};
 
 /// Builds an SSTable from key-value pairs.
 pub struct SsTableBuilder {
@@ -36,7 +43,15 @@ pub struct SsTableBuilder {
 impl SsTableBuilder {
     /// Create a builder based on target block size.
     pub fn new(block_size: usize) -> Self {
-        unimplemented!()
+        let builder = BlockBuilder::new(block_size);
+        Self {
+            block_size,
+            builder,
+            first_key: vec![],
+            last_key: vec![],
+            data: vec![],
+            meta: vec![],
+        }
     }
 
     /// Adds a key-value pair to SSTable.
@@ -44,7 +59,9 @@ impl SsTableBuilder {
     /// Note: You should split a new block when the current block is full.(`std::mem::replace` may
     /// be helpful here)
     pub fn add(&mut self, key: KeySlice, value: &[u8]) {
-        unimplemented!()
+        // Q: i don't quite get it. I thought SSTable supposedly to just wrap
+        // memtable instead of accepting individual key?
+        _ = self.builder.add(key, value);
     }
 
     /// Get the estimated size of the SSTable.
@@ -62,7 +79,25 @@ impl SsTableBuilder {
         block_cache: Option<Arc<BlockCache>>,
         path: impl AsRef<Path>,
     ) -> Result<SsTable> {
-        unimplemented!()
+        let meta_offset = self.data.len();
+        let file_obj = FileObject::create(path.as_ref(), self.data).unwrap();
+
+        let sst = SsTable {
+            file: file_obj,
+            block_meta: self.meta,
+            block_meta_offset: meta_offset,
+            id: id,
+            block_cache,
+            first_key: Key::from_bytes(Bytes::new()),
+            last_key: Key::from_bytes(Bytes::new()),
+            bloom: None,
+            max_ts: SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+        };
+
+        Ok(sst)
     }
 
     #[cfg(test)]
