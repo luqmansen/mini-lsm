@@ -15,12 +15,13 @@
 #![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
 #![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
 
+use std::path::Path;
 use std::sync::Arc;
 use std::time::SystemTime;
-use std::{path::Path, time};
+use std::{io::Write, mem};
 
 use anyhow::Result;
-use bytes::Bytes;
+use bytes::{BufMut, Bytes};
 
 use super::{BlockMeta, SsTable};
 use crate::{
@@ -61,7 +62,51 @@ impl SsTableBuilder {
     pub fn add(&mut self, key: KeySlice, value: &[u8]) {
         // Q: i don't quite get it. I thought SSTable supposedly to just wrap
         // memtable instead of accepting individual key?
-        _ = self.builder.add(key, value);
+
+        let is_full = self.builder.add(key, value);
+
+        let first_key = Key::from_bytes(Bytes::copy_from_slice(key.raw_ref()));
+        let last_key = Key::from_bytes(Bytes::copy_from_slice(key.raw_ref()));
+        match &mut self.meta.last_mut() {
+            Some(meta) => {
+                // if it's full, meaning that last meta is owned by prev block
+                if !is_full {
+                    if meta.first_key.is_empty() {
+                        meta.first_key = first_key;
+                    }
+                    meta.last_key = last_key;
+                } else {
+                    self.meta.push(BlockMeta {
+                        offset: 0,
+                        first_key,
+                        last_key,
+                    });
+                }
+            }
+            None => {
+                self.meta.push(BlockMeta {
+                    offset: 0,
+                    first_key,
+                    last_key,
+                });
+            }
+        }
+
+        if !is_full {
+            return;
+        }
+        // dbg!("block is full!");
+
+        let new_builder = BlockBuilder::new(self.block_size);
+        let old_builder = mem::replace(&mut self.builder, new_builder);
+
+        let old_block = old_builder.build();
+        let block_bytes = old_block.encode();
+
+        self.data.extend_from_slice(block_bytes.as_ref());
+        self.meta.last_mut().map(|m| m.offset = self.data.len());
+
+        return;
     }
 
     /// Get the estimated size of the SSTable.
@@ -79,17 +124,34 @@ impl SsTableBuilder {
         block_cache: Option<Arc<BlockCache>>,
         path: impl AsRef<Path>,
     ) -> Result<SsTable> {
-        let meta_offset = self.data.len();
-        let file_obj = FileObject::create(path.as_ref(), self.data).unwrap();
+        /*
+        * -------------------------------------------------------------------------------------------
+        |         Block Section         |          Meta Section         |          Extra          |
+        -------------------------------------------------------------------------------------------
+        | data block | ... | data block |            metadata           | meta block offset (u32) |
+        -------------------------------------------------------------------------------------------
+        */
+
+        // idk whether i can append to self.data in-place or i need to allocate in-case self.data
+        // is still used downstream
+        let mut data_to_write = vec![];
+        data_to_write.extend_from_slice(self.data.as_ref());
+
+        let block_meta_offset = self.data.len();
+        BlockMeta::encode_block_meta(&self.meta, &mut data_to_write);
+
+        data_to_write.put_u32(block_meta_offset as u32);
+
+        let file_obj = FileObject::create(path.as_ref(), data_to_write)?;
 
         let sst = SsTable {
             file: file_obj,
             block_meta: self.meta,
-            block_meta_offset: meta_offset,
+            block_meta_offset,
             id: id,
             block_cache,
-            first_key: Key::from_bytes(Bytes::new()),
-            last_key: Key::from_bytes(Bytes::new()),
+            first_key: Key::from_bytes(Bytes::from_owner(self.first_key)),
+            last_key: Key::from_bytes(Bytes::from_owner(self.last_key)),
             bloom: None,
             max_ts: SystemTime::now()
                 .duration_since(SystemTime::UNIX_EPOCH)

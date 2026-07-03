@@ -20,17 +20,18 @@ mod builder;
 mod iterator;
 
 use std::fs::File;
+use std::io::Read;
+use std::os::unix::fs::FileExt;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::SystemTime;
 
 use anyhow::{Ok, Result};
 pub use builder::SsTableBuilder;
-use bytes::{Buf, Bytes};
+use bytes::{Buf, BufMut};
 pub use iterator::SsTableIterator;
 
 use crate::block::Block;
-use crate::key::{Key, KeyBytes, KeySlice};
+use crate::key::{KeyBytes, KeySlice};
 use crate::lsm_storage::BlockCache;
 
 use self::bloom::Bloom;
@@ -46,6 +47,10 @@ pub struct BlockMeta {
 }
 
 impl BlockMeta {
+    /*
+     * | first_key_len  (2b) | first key | last key len (2b) | last key | offset (u32)
+     */
+
     /// Encode block meta to a buffer.
     /// You may add extra fields to the buffer,
     /// in order to help keep track of `first_key` when decoding from the same buffer in the future.
@@ -54,12 +59,33 @@ impl BlockMeta {
         #[allow(clippy::ptr_arg)] // remove this allow after you finish
         buf: &mut Vec<u8>,
     ) {
-        unimplemented!()
+        for block in block_meta.iter() {
+            buf.put_u16(block.first_key.len() as u16);
+            buf.put_slice(block.first_key.raw_ref());
+            buf.put_u16(block.last_key.len() as u16);
+            buf.put_slice(block.last_key.raw_ref());
+            buf.put_u32(block.offset as u32);
+        }
     }
 
     /// Decode block meta from a buffer.
-    pub fn decode_block_meta(buf: impl Buf) -> Vec<BlockMeta> {
-        unimplemented!()
+    pub fn decode_block_meta(mut buf: impl Buf) -> Vec<BlockMeta> {
+        let mut out = Vec::new();
+        while buf.has_remaining() {
+            let first_key_len = buf.get_u16();
+            let first_key = buf.copy_to_bytes(first_key_len as usize);
+
+            let last_key_len = buf.get_u16();
+            let last_key = buf.copy_to_bytes(last_key_len as usize);
+
+            out.push(BlockMeta {
+                offset: buf.get_u32() as usize,
+                first_key: KeyBytes::from_bytes(first_key),
+                last_key: KeyBytes::from_bytes(last_key),
+            });
+        }
+
+        out
     }
 }
 
@@ -123,19 +149,52 @@ impl SsTable {
 
     /// Open SSTable from a file.
     pub fn open(id: usize, block_cache: Option<Arc<BlockCache>>, file: FileObject) -> Result<Self> {
+        // -------------------------------------------------------------------------------------------
+        // |         Block Section         |          Meta Section         |          Extra          |
+        // -------------------------------------------------------------------------------------------
+        // | data block | ... | data block |            metadata           | meta block offset (u32) |
+        // -------------------------------------------------------------------------------------------
+        let file_obj = file.0.as_ref().unwrap();
+
+        let mut meta_block_offset_buff = vec![0u8; 4];
+        let block_meta_offset = (file.1 - 4) as usize;
+
+        _ = file_obj.read_exact_at(
+            meta_block_offset_buff.as_mut_slice(),
+            block_meta_offset as u64,
+        );
+
+        dbg!(file.1, block_meta_offset, &meta_block_offset_buff);
+
+        let meta_offsets = u32::from_be_bytes(meta_block_offset_buff.try_into().unwrap());
+
+        let mut meta_buff = vec![0u8; block_meta_offset - meta_offsets as usize];
+
+        _ = file_obj.read_exact_at(meta_buff.as_mut_slice(), meta_offsets as u64);
+        // dbg!(block_meta_offset as u32, meta_offsets);
+
+        assert!(meta_buff.len() > 0, "metadata buffer should not be empty");
+
+        // dbg!(&meta_buff);
+
+        let block_meta = BlockMeta::decode_block_meta(meta_buff.as_ref());
+
+        dbg!(meta_buff);
+        dbg!(&block_meta);
+
+        let first_key = block_meta.first().unwrap().first_key.clone();
+        let last_key = block_meta.last().unwrap().last_key.clone();
+
         let sst = SsTable {
             file: file,
-            block_meta: todo!(),
-            block_meta_offset: todo!(),
-            id: id,
+            block_meta,
+            block_meta_offset,
+            id: 0,
             block_cache,
-            first_key: Key::from_bytes(Bytes::new()),
-            last_key: Key::from_bytes(Bytes::new()),
+            first_key,
+            last_key,
             bloom: None,
-            max_ts: SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
+            max_ts: 0,
         };
 
         Ok(sst)
