@@ -164,7 +164,7 @@ impl SsTable {
             block_meta_offset as u64,
         );
 
-        dbg!(file.1, block_meta_offset, &meta_block_offset_buff);
+        // dbg!(file.1, block_meta_offset, &meta_block_offset_buff);
 
         let meta_offsets = u32::from_be_bytes(meta_block_offset_buff.try_into().unwrap());
 
@@ -179,11 +179,14 @@ impl SsTable {
 
         let block_meta = BlockMeta::decode_block_meta(meta_buff.as_ref());
 
-        dbg!(meta_buff);
-        dbg!(&block_meta);
+        // dbg!(meta_buff);
+        // dbg!(&block_meta);
 
         let first_key = block_meta.first().unwrap().first_key.clone();
         let last_key = block_meta.last().unwrap().last_key.clone();
+
+        assert!(!first_key.is_empty());
+        assert!(!last_key.is_empty());
 
         let sst = SsTable {
             file: file,
@@ -222,7 +225,37 @@ impl SsTable {
 
     /// Read a block from the disk.
     pub fn read_block(&self, block_idx: usize) -> Result<Arc<Block>> {
-        unimplemented!()
+        // -------------------------------------------------------------------------------------------
+        // |         Block Section         |          Meta Section         |          Extra          |
+        // -------------------------------------------------------------------------------------------
+        // | data block | ... | data block |            metadata           | meta block offset (u32) |
+        // -------------------------------------------------------------------------------------------
+        let start_offset = self.block_meta.get(block_idx).unwrap().offset;
+        let end_offset = {
+            match self.block_meta.get(block_idx + 1) {
+                Some(m) => m.offset as u32,
+                None => self.block_meta_offset as u32,
+            }
+        };
+
+        assert!(
+            end_offset > start_offset as u32,
+            "start offset {:}, end_offset {:}",
+            start_offset,
+            end_offset
+        );
+
+        let b = self
+            .file
+            .read(
+                start_offset as u64,
+                (end_offset - start_offset as u32) as u64,
+            )
+            .unwrap();
+
+        assert!(b.len() > 0);
+
+        Ok(Arc::new(Block::decode(b.as_slice())))
     }
 
     /// Read a block from disk, with block cache. (Day 4)

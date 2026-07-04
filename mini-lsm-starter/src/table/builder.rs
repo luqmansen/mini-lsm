@@ -62,6 +62,12 @@ impl SsTableBuilder {
     pub fn add(&mut self, key: KeySlice, value: &[u8]) {
         // Q: i don't quite get it. I thought SSTable supposedly to just wrap
         // memtable instead of accepting individual key?
+        //
+        if self.first_key.is_empty() {
+            self.first_key = key.into_inner().to_vec();
+        }
+
+        self.last_key = key.into_inner().to_vec();
 
         let is_full = self.builder.add(key, value);
 
@@ -153,10 +159,7 @@ impl SsTableBuilder {
             first_key: Key::from_bytes(Bytes::from_owner(self.first_key)),
             last_key: Key::from_bytes(Bytes::from_owner(self.last_key)),
             bloom: None,
-            max_ts: SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
+            max_ts: 0,
         };
 
         Ok(sst)
