@@ -15,9 +15,9 @@
 #![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
 #![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
 
-use std::sync::Arc;
+use std::{mem, sync::Arc};
 
-use anyhow::Result;
+use anyhow::{Error, Ok, Result};
 
 use super::SsTable;
 use crate::{block::BlockIterator, iterators::StorageIterator, key::KeySlice};
@@ -43,7 +43,11 @@ impl SsTableIterator {
 
     /// Seek to the first key-value pair in the first data block.
     pub fn seek_to_first(&mut self) -> Result<()> {
-        unimplemented!()
+        let sst_iter = SsTableIterator::create_and_seek_to_first(self.table.clone()).unwrap();
+
+        _ = mem::replace(self, sst_iter);
+
+        Ok(())
     }
 
     /// Create a new iterator and seek to the first key-value pair which >= `key`.
@@ -64,22 +68,41 @@ impl StorageIterator for SsTableIterator {
 
     /// Return the `key` that's held by the underlying block iterator.
     fn key(&self) -> KeySlice<'_> {
-        unimplemented!()
+        self.blk_iter.key()
     }
 
     /// Return the `value` that's held by the underlying block iterator.
     fn value(&self) -> &[u8] {
-        unimplemented!()
+        self.blk_iter.value()
     }
 
     /// Return whether the current block iterator is valid or not.
     fn is_valid(&self) -> bool {
-        unimplemented!()
+        self.blk_iter.is_valid()
     }
 
     /// Move to the next `key` in the block.
     /// Note: You may want to check if the current block iterator is valid after the move.
     fn next(&mut self) -> Result<()> {
-        unimplemented!()
+        self.blk_iter.next();
+        if self.blk_iter.is_valid() {
+            return Ok(());
+        }
+
+        if self.blk_idx + 1 > self.table.num_of_blocks() {
+            return Ok(());
+        }
+
+        let next_block = self.table.read_block(self.blk_idx + 1)?;
+        let blk_iter = BlockIterator::create_and_seek_to_first(next_block);
+
+        if !blk_iter.is_valid() {
+            return Ok(());
+        }
+
+        self.blk_iter = blk_iter;
+        self.blk_idx += 1;
+
+        Ok(())
     }
 }

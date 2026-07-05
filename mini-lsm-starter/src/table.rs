@@ -20,12 +20,11 @@ mod builder;
 mod iterator;
 
 use std::fs::File;
-use std::io::Read;
 use std::os::unix::fs::FileExt;
 use std::path::Path;
 use std::sync::Arc;
 
-use anyhow::{Ok, Result};
+use anyhow::{Error, Ok, Result};
 pub use builder::SsTableBuilder;
 use bytes::{Buf, BufMut};
 pub use iterator::SsTableIterator;
@@ -225,6 +224,17 @@ impl SsTable {
 
     /// Read a block from the disk.
     pub fn read_block(&self, block_idx: usize) -> Result<Arc<Block>> {
+        // if block_idx > self.block_meta.len() - 1 {
+        //     return Ok(None);
+        // Correction: this is not error. this convention is to reserve Err to real error such as io error, etc
+        // end of block should just return None and upstream will check is_valid = False
+        // return Err(Error::msg(format!(
+        //     "attempting to access idx {:?} from {:?} array len",
+        //     block_idx,
+        //     self.block_meta.len() - 1
+        // )));
+        // }
+
         // -------------------------------------------------------------------------------------------
         // |         Block Section         |          Meta Section         |          Extra          |
         // -------------------------------------------------------------------------------------------
@@ -272,7 +282,7 @@ impl SsTable {
 
     /// Get number of data blocks.
     pub fn num_of_blocks(&self) -> usize {
-        self.block_meta.len()
+        self.block_meta.len() - 1
     }
 
     pub fn first_key(&self) -> &KeyBytes {

@@ -60,9 +60,6 @@ impl SsTableBuilder {
     /// Note: You should split a new block when the current block is full.(`std::mem::replace` may
     /// be helpful here)
     pub fn add(&mut self, key: KeySlice, value: &[u8]) {
-        // Q: i don't quite get it. I thought SSTable supposedly to just wrap
-        // memtable instead of accepting individual key?
-        //
         if self.first_key.is_empty() {
             self.first_key = key.into_inner().to_vec();
         }
@@ -109,8 +106,8 @@ impl SsTableBuilder {
         let old_block = old_builder.build();
         let block_bytes = old_block.encode();
 
-        self.data.extend_from_slice(block_bytes.as_ref());
         self.meta.last_mut().map(|m| m.offset = self.data.len());
+        self.data.extend_from_slice(block_bytes.as_ref());
 
         return;
     }

@@ -52,25 +52,31 @@ impl BlockIterator {
 
     /// Creates a block iterator and seek to the first entry.
     pub fn create_and_seek_to_first(block: Arc<Block>) -> Self {
-        let first_offset_idx = block.offsets.first().unwrap();
-        let second_offset_idx = block.offsets.get(1).unwrap();
+        let mut data = block.data.as_slice();
 
-        let first_entry = &block.data[*first_offset_idx as usize..*second_offset_idx as usize];
+        let key_len = data.get_u16();
+        let key = data.copy_to_bytes(key_len as usize);
+        let value_len = data.get_u16();
 
-        // dbg!(first_entry);
-        // dbg!(&first_entry[0..2]);
+        // let first_offset_idx = block.offsets.first().unwrap();
+        // let second_offset_idx = block.offsets.get(1).unwrap();
 
-        let key_len = u16::from_be_bytes(first_entry[0..2].try_into().unwrap());
-        let key = &first_entry[2..2 + key_len as usize];
-        // dbg!(&key);
+        // let first_entry = &block.data[*first_offset_idx as usize..*second_offset_idx as usize];
 
-        let value_len_start_offset = 2 + key.len(); // 2 key len bytes + the actual key length
-        let value_len = u16::from_be_bytes(
-            first_entry[value_len_start_offset..value_len_start_offset + 2]
-                .try_into()
-                .unwrap(),
-        );
-        let value_offset_start = value_len_start_offset + 2;
+        // // dbg!(first_entry);
+        // // dbg!(&first_entry[0..2]);
+
+        // let key_len = u16::from_be_bytes(first_entry[0..2].try_into().unwrap());
+        // let key = &first_entry[2..2 + key_len as usize];
+        // // dbg!(&key);
+
+        // let value_len_start_offset = 2 + key.len(); // 2 key len bytes + the actual key length
+        // let value_len = u16::from_be_bytes(
+        //     first_entry[value_len_start_offset..value_len_start_offset + 2]
+        //         .try_into()
+        //         .unwrap(),
+        // );
+        // let value_offset_start = value_len_start_offset + 2;
 
         // dbg!(value_len);
         // dbg!(
@@ -83,7 +89,10 @@ impl BlockIterator {
         Self {
             block: Arc::clone(&block),
             key: KeyVec::from_vec(key.to_vec()),
-            value_range: (value_offset_start, value_offset_start + value_len as usize),
+            value_range: (
+                (2 + key_len + 2) as usize,
+                (2 + key_len + 2 + value_len) as usize,
+            ),
             idx: 0,
             first_key: KeyVec::from_vec(key.to_vec()),
         }
@@ -144,7 +153,7 @@ impl BlockIterator {
     /// Returns true if the iterator is valid.
     /// Note: You may want to make use of `key`
     pub fn is_valid(&self) -> bool {
-        unimplemented!()
+        !self.key.is_empty()
     }
 
     /// Seeks to the first key in the block.
@@ -186,7 +195,10 @@ impl BlockIterator {
     /// Move to the next key in the block.
     pub fn next(&mut self) {
         let next_key_len_offset = self.value_range.1;
+
+        // out ouf offset, return immediately
         if next_key_len_offset + 2 > self.block.data.len() {
+            self.key = KeyVec::new();
             return;
         }
 
