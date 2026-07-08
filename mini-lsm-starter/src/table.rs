@@ -24,10 +24,11 @@ use std::os::unix::fs::FileExt;
 use std::path::Path;
 use std::sync::Arc;
 
-use anyhow::{Error, Ok, Result};
+use anyhow::{Ok, Result};
 pub use builder::SsTableBuilder;
 use bytes::{Buf, BufMut};
 pub use iterator::SsTableIterator;
+use moka::sync::Cache;
 
 use crate::block::Block;
 use crate::key::{KeyBytes, KeySlice};
@@ -214,7 +215,7 @@ impl SsTable {
             block_meta: vec![],
             block_meta_offset: 0,
             id,
-            block_cache: None,
+            block_cache: Some(Arc::new(Cache::new(1024))),
             first_key,
             last_key,
             bloom: None,
@@ -281,7 +282,15 @@ impl SsTable {
 
     /// Read a block from disk, with block cache. (Day 4)
     pub fn read_block_cached(&self, block_idx: usize) -> Result<Arc<Block>> {
-        unimplemented!()
+        match self.block_cache.clone() {
+            Some(cache) => {
+                return Ok(cache
+                    .try_get_with((self.id, block_idx), || self.read_block(block_idx))
+                    .unwrap()
+                    .clone());
+            }
+            None => panic!("cache is none"),
+        }
     }
 
     /// Find the block that may contain `key`.

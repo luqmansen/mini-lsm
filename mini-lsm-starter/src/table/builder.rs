@@ -180,6 +180,7 @@ impl SsTableBuilder {
 
     #[cfg(test)]
     pub(crate) fn build_for_test(self, path: impl AsRef<Path>) -> Result<SsTable> {
-        self.build(0, None, path)
+        let cache = Arc::new(BlockCache::new(1024));
+        self.build(0, Some(cache.clone()), path)
     }
 }
