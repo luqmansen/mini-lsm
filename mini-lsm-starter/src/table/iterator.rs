@@ -15,9 +15,9 @@
 #![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
 #![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
 
-use std::{mem, sync::Arc};
+use std::{cmp, mem, sync::Arc, usize};
 
-use anyhow::{Error, Ok, Result};
+use anyhow::Result;
 
 use super::SsTable;
 use crate::{block::BlockIterator, iterators::StorageIterator, key::KeySlice};
@@ -52,14 +52,69 @@ impl SsTableIterator {
 
     /// Create a new iterator and seek to the first key-value pair which >= `key`.
     pub fn create_and_seek_to_key(table: Arc<SsTable>, key: KeySlice) -> Result<Self> {
-        unimplemented!()
+        //   1st  ---- last  |  1st ---- last |
+        let idx = table.block_meta.binary_search_by(|block_meta| {
+            // println!(
+            //     "{:},{:},{:}",
+            //     String::from_utf8(block_meta.first_key.raw_ref().to_vec()).unwrap(),
+            //     String::from_utf8(block_meta.last_key.raw_ref().to_vec()).unwrap(),
+            //     String::from_utf8(key.raw_ref().to_vec()).unwrap()
+            // );
+            // whole block is before the key
+            if block_meta.last_key.as_key_slice() < key {
+                return cmp::Ordering::Less;
+            // block contains key
+            } else if key < block_meta.first_key.as_key_slice() {
+                return cmp::Ordering::Greater;
+            // block after key
+            } else if key <= block_meta.last_key.as_key_slice()
+                && key >= block_meta.first_key.as_key_slice()
+            {
+                return cmp::Ordering::Equal;
+            } else {
+                panic!("impossible!")
+            }
+        });
+
+        // dbg!(idx);
+
+        // if idx.is_err() {
+        //     dbg!(&table.block_meta);
+        //     return Err(Error::msg(format!("not found {:}", idx.err().unwrap())));
+        // }
+        //
+
+        let new_idx = match idx {
+            Ok(v) => v,
+            Err(v) => {
+                if v > table.block_meta.len() - 1 {
+                    table.block_meta.len() - 1
+                } else {
+                    v
+                }
+            }
+        };
+
+        let mut blk_iter =
+            BlockIterator::create_and_seek_to_first(table.read_block(new_idx).unwrap());
+
+        blk_iter.seek_to_key(key);
+
+        Ok(Self {
+            table,
+            blk_iter,
+            blk_idx: new_idx,
+        })
     }
 
     /// Seek to the first key-value pair which >= `key`.
     /// Note: You probably want to review the handout for detailed explanation when implementing
     /// this function.
     pub fn seek_to_key(&mut self, key: KeySlice) -> Result<()> {
-        unimplemented!()
+        let sst_iter = SsTableIterator::create_and_seek_to_key(self.table.clone(), key).unwrap();
+        _ = mem::replace(self, sst_iter);
+
+        Ok(())
     }
 }
 

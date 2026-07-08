@@ -240,7 +240,18 @@ impl SsTable {
         // -------------------------------------------------------------------------------------------
         // | data block | ... | data block |            metadata           | meta block offset (u32) |
         // -------------------------------------------------------------------------------------------
-        let start_offset = self.block_meta.get(block_idx).unwrap().offset;
+        let start_offset = self
+            .block_meta
+            .get(block_idx)
+            .expect(
+                format!(
+                    "want to read block {:} out of {:} block",
+                    block_idx,
+                    self.block_meta.len()
+                )
+                .as_str(),
+            )
+            .offset;
         let end_offset = {
             match self.block_meta.get(block_idx + 1) {
                 Some(m) => m.offset as u32,

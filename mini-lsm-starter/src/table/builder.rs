@@ -66,36 +66,40 @@ impl SsTableBuilder {
 
         self.last_key = key.into_inner().to_vec();
 
-        let is_full = self.builder.add(key, value);
+        let is_accepted = self.builder.add(key, value);
 
-        let first_key = Key::from_bytes(Bytes::copy_from_slice(key.raw_ref()));
-        let last_key = Key::from_bytes(Bytes::copy_from_slice(key.raw_ref()));
+        // update the meta block
+        let key_bytes = Key::from_bytes(Bytes::copy_from_slice(key.raw_ref()));
         match &mut self.meta.last_mut() {
-            Some(meta) => {
-                // if it's full, meaning that last meta is owned by prev block
-                if !is_full {
-                    if meta.first_key.is_empty() {
-                        meta.first_key = first_key;
-                    }
-                    meta.last_key = last_key;
-                } else {
-                    self.meta.push(BlockMeta {
-                        offset: 0,
-                        first_key,
-                        last_key,
-                    });
-                }
-            }
+            // first time adding a key.
             None => {
+                assert!(self.meta.len() == 0);
+
                 self.meta.push(BlockMeta {
                     offset: 0,
-                    first_key,
-                    last_key,
+                    first_key: key_bytes.clone(),
+                    last_key: key_bytes,
                 });
+            }
+            Some(meta) => {
+                if !is_accepted {
+                    // if it's full, split new blockmeta
+                    self.meta.push(BlockMeta {
+                        offset: 0,
+                        first_key: key_bytes.clone(),
+                        last_key: key_bytes,
+                    });
+                } else {
+                    //update prev meta is owned by prev block
+                    if meta.first_key.is_empty() {
+                        meta.first_key = key_bytes.clone();
+                    }
+                    meta.last_key = key_bytes;
+                }
             }
         }
 
-        if !is_full {
+        if is_accepted {
             return;
         }
         // dbg!("block is full!");
@@ -103,11 +107,17 @@ impl SsTableBuilder {
         let new_builder = BlockBuilder::new(self.block_size);
         let old_builder = mem::replace(&mut self.builder, new_builder);
 
+        self.add(key, value);
+
         let old_block = old_builder.build();
         let block_bytes = old_block.encode();
 
-        self.meta.last_mut().map(|m| m.offset = self.data.len());
         self.data.extend_from_slice(block_bytes.as_ref());
+        // modify lastly added blockmeta, which was 0
+        self.meta.last_mut().map(|m| {
+            assert!(m.offset == 0);
+            m.offset = self.data.len()
+        });
 
         return;
     }
@@ -138,6 +148,12 @@ impl SsTableBuilder {
         // idk whether i can append to self.data in-place or i need to allocate in-case self.data
         // is still used downstream
         let mut data_to_write = vec![];
+
+        // flush last builder
+        let old_block = self.builder.build();
+        let block_bytes = old_block.encode();
+        self.data.extend_from_slice(block_bytes.as_ref());
+
         data_to_write.extend_from_slice(self.data.as_ref());
 
         let block_meta_offset = self.data.len();
