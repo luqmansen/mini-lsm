@@ -304,18 +304,6 @@ impl LsmStorageInner {
     pub fn get(&self, _key: &[u8]) -> Result<Option<Bytes>> {
         let state = self.state.read();
 
-        // check the active memtable
-        // if let Some(value) = state.memtable.get(_key) {
-        //     return Ok(Some(value).filter(|e| !e.is_empty()));
-        // }
-
-        // // check immutable memtables i order
-        // for memtable in &state.imm_memtables {
-        //     if let Some(value) = memtable.get(_key) {
-        //         return Ok(Some(value).filter(|v| !v.is_empty()));
-        //     }
-        // }
-
         let iter = self.scan(Bound::Included(_key), Bound::Included(_key))?;
 
         while iter.is_valid() {
@@ -327,30 +315,10 @@ impl LsmStorageInner {
                 }
             }
         }
-        
+
         Ok(None)
 
-        // my original solution :D
-        //
-        // let v = state.memtable.get(_key);
-
-        // let val = v.filter(|e| !e.is_empty());
-        // if val.is_some() {
-        //     return Ok(val);
-        // };
-
-        // for mem in state.imm_memtables.iter() {
-        //     let entry = mem.get(_key);
-        //     if entry.is_some() {
-        //         if entry.unwrap().is_empty() {
-        //             return Ok(None);
-        //         } else {
-        //             return Ok(mem.get(_key));
-        //         }
-        //     }
-        // }
-
-        // Ok(None)
+     
     }
 
     /// Write a batch of data into the storage. Implement in week 2 day 7.
