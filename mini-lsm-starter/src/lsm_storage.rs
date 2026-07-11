@@ -33,7 +33,7 @@ use crate::compact::{
 use crate::iterators::StorageIterator;
 use crate::iterators::merge_iterator::MergeIterator;
 use crate::iterators::two_merge_iterator::TwoMergeIterator;
-use crate::key::Key;
+use crate::key::{Key, KeySlice};
 use crate::lsm_iterator::{FusedIterator, LsmIterator};
 use crate::manifest::Manifest;
 use crate::mem_table::{MemTable, map_bound};
@@ -305,17 +305,29 @@ impl LsmStorageInner {
         let state = self.state.read();
 
         // check the active memtable
-        if let Some(value) = state.memtable.get(_key) {
-            return Ok(Some(value).filter(|e| !e.is_empty()));
-        }
+        // if let Some(value) = state.memtable.get(_key) {
+        //     return Ok(Some(value).filter(|e| !e.is_empty()));
+        // }
 
-        // check immutable memtables i order
-        for memtable in &state.imm_memtables {
-            if let Some(value) = memtable.get(_key) {
-                return Ok(Some(value).filter(|v| !v.is_empty()));
+        // // check immutable memtables i order
+        // for memtable in &state.imm_memtables {
+        //     if let Some(value) = memtable.get(_key) {
+        //         return Ok(Some(value).filter(|v| !v.is_empty()));
+        //     }
+        // }
+
+        let iter = self.scan(Bound::Included(_key), Bound::Included(_key))?;
+
+        while iter.is_valid() {
+            if iter.key() == _key {
+                if !iter.value().is_empty() {
+                    return Ok(Some(Bytes::copy_from_slice(iter.value())));
+                } else {
+                    return Ok(None);
+                }
             }
         }
-
+        
         Ok(None)
 
         // my original solution :D
@@ -431,17 +443,23 @@ impl LsmStorageInner {
         _lower: Bound<&[u8]>,
         _upper: Bound<&[u8]>,
     ) -> Result<FusedIterator<LsmIterator>> {
-        let state = self.state.read();
-
-        let imm_memtables = state.imm_memtables.clone();
-        let memtbl = state.memtable.clone();
+        let state = {
+            // to not hold the read lock for too long because SSTableIterator::create
+            // involves IO operations
+            let guard = self.state.read();
+            Arc::clone(&guard)
+        };
 
         let mut iters = Vec::new();
 
+        let memtbl = state.memtable.clone();
         iters.push(Box::new(memtbl.scan(_lower, _upper)));
+
+        let imm_memtables = state.imm_memtables.clone();
         for tbl in imm_memtables.iter() {
             iters.push(Box::new(tbl.scan(_lower, _upper)));
         }
+
         let sst_iters = state
             .l0_sstables
             .iter()
