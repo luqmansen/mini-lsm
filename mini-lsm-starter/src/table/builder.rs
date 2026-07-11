@@ -15,10 +15,9 @@
 #![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
 #![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
 
+use std::mem;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::SystemTime;
-use std::{io::Write, mem};
 
 use anyhow::Result;
 use bytes::{BufMut, Bytes};

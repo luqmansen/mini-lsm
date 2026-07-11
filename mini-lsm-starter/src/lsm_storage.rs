@@ -30,12 +30,15 @@ use crate::compact::{
     CompactionController, CompactionOptions, LeveledCompactionController, LeveledCompactionOptions,
     SimpleLeveledCompactionController, SimpleLeveledCompactionOptions, TieredCompactionController,
 };
+use crate::iterators::StorageIterator;
 use crate::iterators::merge_iterator::MergeIterator;
+use crate::iterators::two_merge_iterator::TwoMergeIterator;
+use crate::key::Key;
 use crate::lsm_iterator::{FusedIterator, LsmIterator};
 use crate::manifest::Manifest;
-use crate::mem_table::MemTable;
+use crate::mem_table::{MemTable, map_bound};
 use crate::mvcc::LsmMvccInner;
-use crate::table::SsTable;
+use crate::table::{SsTable, SsTableIterator};
 
 pub type BlockCache = moka::sync::Cache<(usize, usize), Arc<Block>>;
 
@@ -439,9 +442,41 @@ impl LsmStorageInner {
         for tbl in imm_memtables.iter() {
             iters.push(Box::new(tbl.scan(_lower, _upper)));
         }
+        let sst_iters = state
+            .l0_sstables
+            .iter()
+            .map(|ix| {
+                let t = state.sstables.get(ix).unwrap();
+
+                let sst = match _lower {
+                    Bound::Included(k) => {
+                        let k = Key::from_slice(k);
+                        SsTableIterator::create_and_seek_to_key(t.clone(), k).unwrap()
+                    }
+                    Bound::Excluded(k) => {
+                        let k = Key::from_slice(k);
+                        let mut t = SsTableIterator::create_and_seek_to_key(t.clone(), k).unwrap();
+                        t.next().unwrap();
+
+                        t
+                    }
+                    Bound::Unbounded => {
+                        SsTableIterator::create_and_seek_to_first(t.clone()).unwrap()
+                    }
+                };
+
+                return Box::new(sst);
+            })
+            .collect();
+
+        let lsm_iter = TwoMergeIterator::create(
+            MergeIterator::create(iters),
+            MergeIterator::create(sst_iters),
+        )
+        .unwrap();
 
         Ok(FusedIterator::new(
-            LsmIterator::new(MergeIterator::create(iters)).unwrap(),
+            LsmIterator::new(lsm_iter, map_bound(_upper)).unwrap(),
         ))
     }
 }
