@@ -1,1 +1,1 @@
-GEMINI.md
+AGENTS.MD

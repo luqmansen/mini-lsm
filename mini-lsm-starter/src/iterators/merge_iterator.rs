@@ -80,6 +80,19 @@ impl<I: 'static + for<'a> StorageIterator<KeyType<'a> = KeySlice<'a>>> StorageIt
 {
     type KeyType<'a> = KeySlice<'a>;
 
+    fn num_active_iterators(&self) -> usize {
+        let mut cnt = 0;
+        for iter in self.iter_heap.iter() {
+            cnt += iter.1.as_ref().num_active_iterators();
+        }
+
+        if self.current_iterator.is_some() {
+            cnt += 1;
+        }
+
+        cnt
+    }
+
     fn key(&self) -> KeySlice<'_> {
         self.current_iterator.as_ref().unwrap().1.key()
     }

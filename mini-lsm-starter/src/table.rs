@@ -289,7 +289,7 @@ impl SsTable {
                     .unwrap()
                     .clone());
             }
-            None => panic!("cache is none"),
+            None => self.read_block(block_idx),
         }
     }
 

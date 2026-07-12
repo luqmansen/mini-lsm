@@ -16,6 +16,7 @@
 #![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
 
 use std::collections::HashMap;
+use std::fs::DirBuilder;
 use std::ops::Bound;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -33,12 +34,12 @@ use crate::compact::{
 use crate::iterators::StorageIterator;
 use crate::iterators::merge_iterator::MergeIterator;
 use crate::iterators::two_merge_iterator::TwoMergeIterator;
-use crate::key::{Key, KeySlice};
+use crate::key::Key;
 use crate::lsm_iterator::{FusedIterator, LsmIterator};
 use crate::manifest::Manifest;
 use crate::mem_table::{MemTable, map_bound};
 use crate::mvcc::LsmMvccInner;
-use crate::table::{SsTable, SsTableIterator};
+use crate::table::{SsTable, SsTableBuilder, SsTableIterator};
 
 pub type BlockCache = moka::sync::Cache<(usize, usize), Arc<Block>>;
 
@@ -260,6 +261,11 @@ impl LsmStorageInner {
     /// not exist.
     pub(crate) fn open(path: impl AsRef<Path>, options: LsmStorageOptions) -> Result<Self> {
         let path = path.as_ref();
+
+        if !path.exists() {
+            DirBuilder::new().recursive(true).create(path).unwrap();
+        }
+
         let state = LsmStorageState::create(&options);
 
         let compaction_controller = match &options.compaction_options {
@@ -317,8 +323,6 @@ impl LsmStorageInner {
         }
 
         Ok(None)
-
-     
     }
 
     /// Write a batch of data into the storage. Implement in week 2 day 7.
@@ -397,7 +401,21 @@ impl LsmStorageInner {
 
     /// Force flush the earliest-created immutable memtable to disk
     pub fn force_flush_next_imm_memtable(&self) -> Result<()> {
-        unimplemented!()
+        let mut arc_wrapped_state = self.state.write();
+        let mut inner_state = arc_wrapped_state.as_ref().clone();
+
+        let memtbl = inner_state.imm_memtables.pop().unwrap();
+
+        let mut sst_builder = SsTableBuilder::new(memtbl.approximate_size());
+        memtbl.flush(&mut sst_builder)?;
+
+        let sst_id = self.next_sst_id();
+        let sst = sst_builder.build(sst_id, None, self.path.clone())?;
+        inner_state.l0_sstables.insert(0, sst_id);
+        inner_state.sstables.insert(sst_id, Arc::new(sst));
+        *arc_wrapped_state = Arc::new(inner_state);
+
+        Ok(())
     }
 
     pub fn new_txn(&self) -> Result<()> {
@@ -432,7 +450,14 @@ impl LsmStorageInner {
             .l0_sstables
             .iter()
             .map(|ix| {
-                let t = state.sstables.get(ix).unwrap();
+                let t = state.sstables.get(ix).expect(
+                    format!(
+                        "accessiing idx {:} failed, len {:}",
+                        ix,
+                        state.sstables.len()
+                    )
+                    .as_ref(),
+                );
 
                 let sst = match _lower {
                     Bound::Included(k) => {
