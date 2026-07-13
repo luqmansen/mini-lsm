@@ -164,8 +164,7 @@ impl LsmStorageInner {
         let shall_flush = {
             let state = self.state.read();
 
-            state.imm_memtables.len() + state.memtable.approximate_size()
-                >= self.options.num_memtable_limit
+            state.imm_memtables.len() >= self.options.num_memtable_limit
         };
 
         if shall_flush {
