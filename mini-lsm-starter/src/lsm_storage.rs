@@ -426,8 +426,8 @@ impl LsmStorageInner {
     /// Create an iterator over a range of keys.
     pub fn scan(
         &self,
-        _lower: Bound<&[u8]>,
-        _upper: Bound<&[u8]>,
+        lower: Bound<&[u8]>,
+        upper: Bound<&[u8]>,
     ) -> Result<FusedIterator<LsmIterator>> {
         let state = {
             // to not hold the read lock for too long because SSTableIterator::create
@@ -439,27 +439,54 @@ impl LsmStorageInner {
         let mut iters = Vec::new();
 
         let memtbl = state.memtable.clone();
-        iters.push(Box::new(memtbl.scan(_lower, _upper)));
+        iters.push(Box::new(memtbl.scan(lower, upper)));
 
         let imm_memtables = state.imm_memtables.clone();
         for tbl in imm_memtables.iter() {
-            iters.push(Box::new(tbl.scan(_lower, _upper)));
+            iters.push(Box::new(tbl.scan(lower, upper)));
         }
 
         let sst_iters = state
             .l0_sstables
             .iter()
             .map(|ix| {
-                let t = state.sstables.get(ix).expect(
+                state.sstables.get(ix).expect(
                     format!(
                         "accessiing idx {:} failed, len {:}",
                         ix,
                         state.sstables.len()
                     )
                     .as_ref(),
-                );
+                )
+            })
+            .filter(|table| {
+                // bound m ....=p
+                // sst f[a..........z] l
 
-                let sst = match _lower {
+                let first = table.first_key().as_key_slice().raw_ref();
+                let last = table.last_key().as_key_slice().raw_ref();
+
+                // SST entirely ABOVE window:              window     [lower ... upper]
+                //                                                                      [first ... last]   first > upper
+                // SST entirely BELOW window:   [first ... last]
+                //                                               [lower ... upper]                         last < lower
+
+                let low = match lower {
+                    Bound::Included(lower) => last >= lower,
+                    Bound::Excluded(lower) => last < lower,
+                    Bound::Unbounded => true,
+                };
+
+                let up = match upper {
+                    Bound::Included(upper) => first <= upper,
+                    Bound::Excluded(upper) => first < upper,
+                    Bound::Unbounded => true,
+                };
+
+                up && low
+            })
+            .map(|t| {
+                let sst = match lower {
                     Bound::Included(k) => {
                         let k = Key::from_slice(k);
                         SsTableIterator::create_and_seek_to_key(t.clone(), k).unwrap()
@@ -468,7 +495,6 @@ impl LsmStorageInner {
                         let k = Key::from_slice(k);
                         let mut t = SsTableIterator::create_and_seek_to_key(t.clone(), k).unwrap();
                         t.next().unwrap();
-
                         t
                     }
                     Bound::Unbounded => {
@@ -487,7 +513,7 @@ impl LsmStorageInner {
         .unwrap();
 
         Ok(FusedIterator::new(
-            LsmIterator::new(lsm_iter, map_bound(_upper)).unwrap(),
+            LsmIterator::new(lsm_iter, map_bound(upper)).unwrap(),
         ))
     }
 }
