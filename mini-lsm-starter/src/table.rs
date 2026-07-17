@@ -19,6 +19,7 @@ pub(crate) mod bloom;
 mod builder;
 mod iterator;
 
+use std::cmp::min;
 use std::fs::File;
 use std::os::unix::fs::FileExt;
 use std::path::Path;
@@ -26,7 +27,7 @@ use std::sync::Arc;
 
 use anyhow::{Ok, Result};
 pub use builder::SsTableBuilder;
-use bytes::{Buf, BufMut};
+use bytes::{Buf, BufMut, buf};
 pub use iterator::SsTableIterator;
 use moka::sync::Cache;
 
@@ -149,29 +150,35 @@ impl SsTable {
 
     /// Open SSTable from a file.
     pub fn open(id: usize, block_cache: Option<Arc<BlockCache>>, file: FileObject) -> Result<Self> {
-        // -------------------------------------------------------------------------------------------
-        // |         Block Section         |          Meta Section         |          Extra          |
-        // -------------------------------------------------------------------------------------------
-        // | data block | ... | data block |            metadata           | meta block offset (u32) |
-        // -------------------------------------------------------------------------------------------
+        // -----------------------------------------------------------------------------------------------------
+        // |         Block Section         |                            Meta Section                           |
+        // -----------------------------------------------------------------------------------------------------
+        // | data block | ... | data block | metadata | meta block offset | bloom filter | bloom filter offset |
+        // |                               |  varlen  |         u32       |    varlen    |        u32          |
+        // -----------------------------------------------------------------------------------------------------
+
         let file_obj = file.0.as_ref().unwrap();
 
-        let mut meta_block_offset_buff = vec![0u8; 4];
-        let block_meta_offset = (file.1 - 4) as usize;
+        use bytes::Buf;
 
-        _ = file_obj.read_exact_at(
-            meta_block_offset_buff.as_mut_slice(),
-            block_meta_offset as u64,
-        );
+        static READ_SIZE: u64 = 8192;
 
-        // dbg!(file.1, block_meta_offset, &meta_block_offset_buff);
+        // 4KB buffer, 1 syscall, may accidentally read the data block but we'll throw it away
+        let mut buff = vec![0u8; min(file.1, READ_SIZE) as usize];
 
-        let meta_offsets = u32::from_be_bytes(meta_block_offset_buff.try_into().unwrap());
+        file_obj.read_exact_at(&mut buff, file.1 - min(file.1, READ_SIZE))?;
 
-        let mut meta_buff = vec![0u8; block_meta_offset - meta_offsets as usize];
+        // assert!(buff.len() >= 4, format!("buff len {:}", buff.len()));
+        let bloom_offset = (&buff[buff.len() - 4..buff.len()]).get_u32() as usize;
 
-        _ = file_obj.read_exact_at(meta_buff.as_mut_slice(), meta_offsets as u64);
-        // dbg!(block_meta_offset as u32, meta_offsets);
+        dbg!(&buff);
+
+        let meta_offset = (&buff[bloom_offset - 4..bloom_offset]).get_u32() as usize;
+
+        let bloom_filter = &buff[bloom_offset..buff.len() - 4];
+        let meta_buff = &buff[meta_offset..bloom_offset - 4];
+
+        let bloom = Bloom::decode(bloom_filter).unwrap();
 
         assert!(meta_buff.len() > 0, "metadata buffer should not be empty");
 
@@ -191,12 +198,12 @@ impl SsTable {
         let sst = SsTable {
             file: file,
             block_meta,
-            block_meta_offset,
+            block_meta_offset: meta_offset,
             id: 0,
             block_cache,
             first_key,
             last_key,
-            bloom: None,
+            bloom: Some(bloom),
             max_ts: 0,
         };
 

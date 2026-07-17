@@ -27,7 +27,7 @@ use crate::{
     block::BlockBuilder,
     key::{Key, KeySlice},
     lsm_storage::BlockCache,
-    table::FileObject,
+    table::{FileObject, bloom::Bloom},
 };
 
 /// Builds an SSTable from key-value pairs.
@@ -38,6 +38,7 @@ pub struct SsTableBuilder {
     data: Vec<u8>,
     pub(crate) meta: Vec<BlockMeta>,
     block_size: usize,
+    bloom_key_hashes: Vec<u32>,
 }
 
 impl SsTableBuilder {
@@ -51,6 +52,7 @@ impl SsTableBuilder {
             last_key: vec![],
             data: vec![],
             meta: vec![],
+            bloom_key_hashes: vec![],
         }
     }
 
@@ -64,6 +66,9 @@ impl SsTableBuilder {
         }
 
         self.last_key = key.into_inner().to_vec();
+
+        self.bloom_key_hashes
+            .push(farmhash::fingerprint32(key.raw_ref()));
 
         let is_accepted = self.builder.add(key, value);
 
@@ -147,18 +152,26 @@ impl SsTableBuilder {
         // idk whether i can append to self.data in-place or i need to allocate in-case self.data
         // is still used downstream
         let mut data_to_write = vec![];
+        data_to_write.extend_from_slice(self.data.as_ref());
 
         // flush last builder
         let old_block = self.builder.build();
         let block_bytes = old_block.encode();
-        self.data.extend_from_slice(block_bytes.as_ref());
+        data_to_write.extend_from_slice(block_bytes.as_ref());
 
-        data_to_write.extend_from_slice(self.data.as_ref());
-
-        let block_meta_offset = self.data.len();
+        let block_meta_offset = data_to_write.len();
         BlockMeta::encode_block_meta(&self.meta, &mut data_to_write);
 
         data_to_write.put_u32(block_meta_offset as u32);
+
+        let bits_per_key = Bloom::bloom_bits_per_key(self.bloom_key_hashes.len(), 0.01);
+        let bloom = Bloom::build_from_key_hashes(&self.bloom_key_hashes, bits_per_key);
+        let mut bloom_encoded = Vec::<u8>::with_capacity(self.bloom_key_hashes.len() + 1);
+        bloom.encode(&mut bloom_encoded);
+
+        let bloom_offset = data_to_write.len();
+        data_to_write.extend_from_slice(bloom_encoded.as_ref());
+        data_to_write.put_u32(bloom_offset as u32);
 
         let file_obj = FileObject::create(&path.as_ref(), data_to_write)?;
 
@@ -170,7 +183,7 @@ impl SsTableBuilder {
             block_cache,
             first_key: Key::from_bytes(Bytes::from_owner(self.first_key)),
             last_key: Key::from_bytes(Bytes::from_owner(self.last_key)),
-            bloom: None,
+            bloom: Some(bloom),
             max_ts: 0,
         };
 
