@@ -24,6 +24,7 @@ use std::sync::atomic::AtomicUsize;
 
 use anyhow::{Ok, Result};
 use bytes::Bytes;
+use nom::character::streaming::tab;
 use parking_lot::{Mutex, MutexGuard, RwLock};
 
 use crate::block::Block;
@@ -307,13 +308,54 @@ impl LsmStorageInner {
     }
 
     /// Get a key from the storage. In day 7, this can be further optimized by using a bloom filter.
-    pub fn get(&self, _key: &[u8]) -> Result<Option<Bytes>> {
+    pub fn get(&self, key: &[u8]) -> Result<Option<Bytes>> {
         let state = self.state.read();
 
-        let iter = self.scan(Bound::Included(_key), Bound::Included(_key))?;
+        if let Some(v) = state.memtable.get(key) {
+            if !v.is_empty() {
+                return Ok(Some(v));
+            } else {
+                return Ok(None);
+            }
+        } else {
+            for memtbl in state.imm_memtables.iter() {
+                if let Some(v) = memtbl.get(key) {
+                    if !v.is_empty() {
+                        return Ok(Some(v));
+                    } else {
+                        return Ok(None);
+                    }
+                }
+            }
+        }
 
+        let maybe_exists = state
+            .l0_sstables
+            .iter()
+            .map(|ix| {
+                state.sstables.get(ix).expect(
+                    format!(
+                        "accessiing idx {:} failed, len {:}",
+                        ix,
+                        state.sstables.len()
+                    )
+                    .as_ref(),
+                )
+            })
+            .any(|table| {
+                table.as_ref().bloom.as_ref().map_or(true, |bloom| {
+                    bloom.may_contain(farmhash::fingerprint32(key))
+                })
+            });
+
+        if !maybe_exists {
+            println!("SAYA AKAN LAWAN");
+            return Ok(None);
+        };
+
+        let iter = self.scan(Bound::Included(key), Bound::Included(key))?;
         while iter.is_valid() {
-            if iter.key() == _key {
+            if iter.key() == key {
                 if !iter.value().is_empty() {
                     return Ok(Some(Bytes::copy_from_slice(iter.value())));
                 } else {
@@ -322,7 +364,7 @@ impl LsmStorageInner {
             }
         }
 
-        Ok(None)
+        return Ok(None);
     }
 
     /// Write a batch of data into the storage. Implement in week 2 day 7.
