@@ -160,7 +160,7 @@ impl SsTableBuilder {
 
         data_to_write.put_u32(block_meta_offset as u32);
 
-        let file_obj = FileObject::create(&path.as_ref().join(format!("{}", id)), data_to_write)?;
+        let file_obj = FileObject::create(&path.as_ref(), data_to_write)?;
 
         let sst = SsTable {
             file: file_obj,

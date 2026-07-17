@@ -410,7 +410,7 @@ impl LsmStorageInner {
         memtbl.flush(&mut sst_builder)?;
 
         let sst_id = self.next_sst_id();
-        let sst = sst_builder.build(sst_id, None, self.path.clone())?;
+        let sst = sst_builder.build(sst_id, None, self.path_of_sst(sst_id))?;
         inner_state.l0_sstables.insert(0, sst_id);
         inner_state.sstables.insert(sst_id, Arc::new(sst));
         *arc_wrapped_state = Arc::new(inner_state);
