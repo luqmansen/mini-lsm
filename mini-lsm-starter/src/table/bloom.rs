@@ -83,7 +83,7 @@ impl Bloom {
     }
 
     /// Build bloom filter from key hashes
-    pub fn build_from_key_hashes(mut keys: &[u32], bits_per_key: usize) -> Self {
+    pub fn build_from_key_hashes(keys: &[u32], bits_per_key: usize) -> Self {
         let k = (bits_per_key as f64 * 0.69) as u32;
         let k = k.clamp(1, 30);
         let nbits = (keys.len() * bits_per_key).max(64);
@@ -113,7 +113,7 @@ impl Bloom {
     pub fn may_contain(&self, h: u32) -> bool {
         if self.k > 30 {
             // potential new encoding for short bloom filters
-            true
+            true // <- too many bits used, don't even need to probe because the result if always "maybe"
         } else {
             let nbits = self.filter.bit_len();
             let delta = h.rotate_left(15);
