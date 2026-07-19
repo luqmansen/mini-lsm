@@ -77,7 +77,10 @@ impl BlockBuilder {
             let mut rest_key = key.raw_ref();
 
             for idx in 0..st.len() {
-                if idx < nd.len() && st[idx] == nd[idx] {
+                if idx < nd.len() {
+                    if st[idx] != nd[idx] {
+                        break;
+                    }
                     key_overlap_len += 1;
                     rest_key_len -= 1;
                     rest_key = &rest_key[1..]

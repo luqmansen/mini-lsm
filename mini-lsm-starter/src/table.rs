@@ -27,7 +27,7 @@ use std::sync::Arc;
 
 use anyhow::{Ok, Result};
 pub use builder::SsTableBuilder;
-use bytes::{Buf, BufMut, buf};
+use bytes::{Buf, BufMut};
 pub use iterator::SsTableIterator;
 use moka::sync::Cache;
 

@@ -24,7 +24,6 @@ use std::sync::atomic::AtomicUsize;
 
 use anyhow::{Ok, Result};
 use bytes::Bytes;
-use nom::character::streaming::tab;
 use parking_lot::{Mutex, MutexGuard, RwLock};
 
 use crate::block::Block;

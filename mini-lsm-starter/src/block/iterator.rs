@@ -19,8 +19,6 @@ use bytes::Buf;
 
 use std::sync::Arc;
 
-use bytes::Bytes;
-
 use crate::key::{KeySlice, KeyVec};
 
 use super::Block;
@@ -58,34 +56,6 @@ impl BlockIterator {
         let key = data.copy_to_bytes(key_len as usize);
         let value_len = data.get_u16();
 
-        // let first_offset_idx = block.offsets.first().unwrap();
-        // let second_offset_idx = block.offsets.get(1).unwrap();
-
-        // let first_entry = &block.data[*first_offset_idx as usize..*second_offset_idx as usize];
-
-        // // dbg!(first_entry);
-        // // dbg!(&first_entry[0..2]);
-
-        // let key_len = u16::from_be_bytes(first_entry[0..2].try_into().unwrap());
-        // let key = &first_entry[2..2 + key_len as usize];
-        // // dbg!(&key);
-
-        // let value_len_start_offset = 2 + key.len(); // 2 key len bytes + the actual key length
-        // let value_len = u16::from_be_bytes(
-        //     first_entry[value_len_start_offset..value_len_start_offset + 2]
-        //         .try_into()
-        //         .unwrap(),
-        // );
-        // let value_offset_start = value_len_start_offset + 2;
-
-        // dbg!(value_len);
-        // dbg!(
-        //     value_len_start_offset,
-        //     value_len_start_offset + value_len as usize
-        // );
-        // let value = &first_entry[value_offset_start..value_offset_start + value_len as usize];
-        // dbg!(str::from_utf8(value).unwrap());
-
         Self {
             block: Arc::clone(&block),
             key: KeyVec::from_vec(key.to_vec()),
@@ -101,10 +71,12 @@ impl BlockIterator {
     /// Creates a block iterator and seek to the first key that >= `key`.
     pub fn create_and_seek_to_key(block: Arc<Block>, key: KeySlice) -> Self {
         let data = &mut block.data.as_slice();
-        let mut current_keyslice = KeySlice::from_slice(&[]);
+
         let mut curr_value_len = 0;
         let initial_len = data.as_ref().len();
-        let mut key_bytes: Bytes;
+
+        let mut first_key = KeyVec::new();
+        let mut current_keyvec = KeyVec::new();
 
         // refactor with more idiomatic buffer handling
         while data.has_remaining() {
@@ -114,14 +86,34 @@ impl BlockIterator {
             // -----------------------------------------------------------------------
             // | key_len (2B) | key (keylen) | value_len (2B) | value (varlen) | ... |
             // -----------------------------------------------------------------------
+            //
+            //
+            // key with prefix compression shaped like this
+            // | key_overlap_len (u16) | rest_key_len (u16) | key (rest_key_len) | ....
 
             let key_len = data.get_u16();
-            key_bytes = data.copy_to_bytes(key_len as usize);
+            let mut key_section_bytes = data.copy_to_bytes(key_len as usize);
             let value_len = data.get_u16();
-            current_keyslice = KeySlice::from_slice(key_bytes.as_ref());
+
             curr_value_len = value_len;
 
-            if current_keyslice >= key {
+            current_keyvec = KeyVec::from_vec(key_section_bytes.to_vec());
+
+            if first_key.is_empty() {
+                first_key = current_keyvec.clone();
+            } else {
+                // decode the prefix
+                let key_overlap_len = key_section_bytes.get_u16();
+                let rest_key_len = key_section_bytes.get_u16();
+                let rest_key = key_section_bytes.copy_to_bytes(rest_key_len as usize);
+                // current_keyvec =
+                let mut full_key = first_key.raw_ref()[0..key_overlap_len as usize].to_vec();
+                full_key.extend_from_slice(rest_key.as_ref());
+
+                current_keyvec = KeyVec::from_vec(full_key);
+            }
+
+            if current_keyvec.as_key_slice() >= key {
                 break;
             }
         }
@@ -134,9 +126,9 @@ impl BlockIterator {
         Self {
             block: Arc::clone(&block),
             value_range,
-            key: current_keyslice.to_key_vec(),
+            key: current_keyvec.clone(),
             idx: 0,
-            first_key: current_keyslice.to_key_vec(),
+            first_key: first_key.clone(),
         }
     }
 
@@ -165,9 +157,6 @@ impl BlockIterator {
 
         let first_entry = &block.data[*first_offset_idx as usize..*second_offset_idx as usize];
 
-        // dbg!(first_entry);
-        // dbg!(&first_entry[0..2]);
-
         let key_len = u16::from_be_bytes(first_entry[0..2].try_into().unwrap());
         let key = &first_entry[2..2 + key_len as usize];
         dbg!(&key);
@@ -179,14 +168,6 @@ impl BlockIterator {
                 .unwrap(),
         );
         let value_offset_start = value_len_start_offset + 2;
-
-        // dbg!(value_len);
-        // dbg!(
-        //     value_len_start_offset,
-        //     value_len_start_offset + value_len as usize
-        // );
-        // let value = &first_entry[value_offset_start..value_offset_start + value_len as usize];
-        // dbg!(str::from_utf8(value).unwrap());
 
         self.key = KeyVec::from_vec(key.to_vec());
         self.value_range = (value_offset_start, value_offset_start + value_len as usize);
@@ -208,7 +189,7 @@ impl BlockIterator {
                 .unwrap(),
         );
 
-        let next_key = &self.block.data
+        let mut next_compressed_key_block = &self.block.data
             [next_key_len_offset + 2..next_key_len_offset + 2 + next_key_len as usize];
 
         let next_value_len_offset = next_key_len_offset + 2 + next_key_len as usize;
@@ -219,10 +200,15 @@ impl BlockIterator {
                 .unwrap(),
         ) as usize;
 
-        // let next_value = &self.block.data
-        //     [next_value_len_offset + 2 + next_value_len_offset + 2 + next_value_len];
+        // decode the prefix
+        let key_overlap_len = next_compressed_key_block.get_u16();
+        let rest_key_len = next_compressed_key_block.get_u16();
+        let rest_key = next_compressed_key_block.copy_to_bytes(rest_key_len as usize);
+        // current_keyvec =
+        let mut full_key = self.first_key.raw_ref()[0..key_overlap_len as usize].to_vec();
+        full_key.extend_from_slice(rest_key.as_ref());
 
-        self.key = KeyVec::from_vec(next_key.to_vec());
+        self.key = KeyVec::from_vec(full_key);
         self.idx += 1;
         self.value_range = (
             next_value_len_offset + 2,
@@ -236,31 +222,48 @@ impl BlockIterator {
     pub fn seek_to_key(&mut self, key: KeySlice) {
         let data = &mut self.block.data.as_slice();
         let initial_len = data.as_ref().len();
-        let mut key_bytes = Bytes::new();
+        let mut current_keyvec = KeyVec::new();
         let mut value_len: u16 = 0; // value can be 0 lenght anyway
         let mut current_pos: usize = 0;
 
         while data.has_remaining() {
+            // REMINDER
+            // -----------------------------------------------------------------------
+            // |                           Entry #1                            | ... |
             // -----------------------------------------------------------------------
             // | key_len (2B) | key (keylen) | value_len (2B) | value (varlen) | ... |
             // -----------------------------------------------------------------------
+            //
+            //
+            // key with prefix compression shaped like this
+            // | key_overlap_len (u16) | rest_key_len (u16) | key (rest_key_len) | ....
 
             let key_len = data.get_u16();
-            key_bytes = data.copy_to_bytes(key_len as usize);
+            let mut key_section_bytes = data.copy_to_bytes(key_len as usize);
             value_len = data.get_u16();
             data.advance(value_len as usize);
 
-            let current_keyslice = KeySlice::from_slice(key_bytes.as_ref());
+            current_keyvec = KeyVec::from_vec(key_section_bytes.to_vec());
             current_pos = initial_len - data.remaining();
+
+            if self.first_key != current_keyvec {
+                let key_overlap_len = key_section_bytes.get_u16();
+                let rest_key_len = key_section_bytes.get_u16();
+                let rest_key = key_section_bytes.copy_to_bytes(rest_key_len as usize);
+                let mut full_key = self.first_key.raw_ref()[0..key_overlap_len as usize].to_vec();
+                full_key.extend_from_slice(rest_key.as_ref());
+
+                current_keyvec = KeyVec::from_vec(full_key);
+            }
 
             self.idx += 1;
 
-            if current_keyslice >= key {
+            if current_keyvec.as_key_slice() >= key {
                 break;
             }
         }
 
-        self.key = KeyVec::from_vec(key_bytes.to_vec());
+        self.key = current_keyvec;
         self.value_range = (current_pos - value_len as usize, current_pos);
     }
 }
