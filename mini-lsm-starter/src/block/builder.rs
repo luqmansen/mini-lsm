@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::vec;
+
 use crate::key::{KeySlice, KeyVec};
+use bytes::BufMut;
 
 use super::Block;
 
@@ -56,16 +59,40 @@ impl BlockBuilder {
             return false;
         }
 
+        let pre = self.data.len();
+        let mut _key = key.clone();
+        let mut buff = vec![];
+
         if self.first_key.is_empty() {
             self.first_key = key.to_key_vec()
+        } else {
+            // prefix compression
+            // key_overlap_len (u16) | rest_key_len (u16) | key (rest_key_len)
+
+            let mut key_overlap_len = 0;
+            let mut rest_key_len = key.len() as u16;
+
+            let st = self.first_key.raw_ref();
+            let nd = key.raw_ref();
+            let mut rest_key = key.raw_ref();
+
+            for idx in 0..st.len() {
+                if idx < nd.len() && st[idx] == nd[idx] {
+                    key_overlap_len += 1;
+                    rest_key_len -= 1;
+                    rest_key = &rest_key[1..]
+                }
+            }
+
+            buff.put_u16(key_overlap_len);
+            buff.put_u16(rest_key_len);
+            buff.put_slice(rest_key);
+
+            _key = KeySlice::from_slice(&buff);
         }
 
-        use bytes::BufMut;
-
-        let pre = self.data.len();
-
-        self.data.put_u16(key.len() as u16);
-        self.data.extend_from_slice(key.raw_ref());
+        self.data.put_u16(_key.len() as u16);
+        self.data.extend_from_slice(_key.raw_ref());
         self.data.put_u16(value.len() as u16);
         self.data.extend_from_slice(value);
         self.offsets.push(pre as u16);
